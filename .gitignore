@@ -1,0 +1,27 @@
+# Model and runtime files
+model.pkl
+trades_log.csv
+promoted_to_live.flag
+
+# Scratch / temp
+raw.zip
+raw_extracted/
+requirements_and_guide.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+dist/
+build/
+
+# Secrets — never commit real keys
+.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
