@@ -1,7 +1,10 @@
 # Model and runtime files
 model.pkl
+model_*.pkl
 trades_log.csv
 promoted_to_live.flag
+ruvector.db
+ss/
 
 # Scratch / temp
 raw.zip
