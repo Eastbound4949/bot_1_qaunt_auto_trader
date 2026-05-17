@@ -24,12 +24,10 @@ import warnings
 warnings.filterwarnings("ignore")
 
 from apscheduler.schedulers.blocking import BlockingScheduler
-from binance.client import Client
-
 import config
 from model_trainer import (
-    HIGHER_TF_MAP,
     add_features,
+    fetch_binance_data,
     fetch_htf_data,
     model_file_for,
     train_and_save,
@@ -49,19 +47,8 @@ def send_telegram(message: str):
 # ─── Data fetching ────────────────────────────────────────────────────────────
 
 def fetch_latest_data(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame | None]:
-    """Returns (base_tf_df, htf_df). htf_df may be None if interval maps to itself."""
-    client = Client(config.BINANCE_API_KEY, config.BINANCE_API_SECRET)
-    raw = client.get_historical_klines(symbol, config.INTERVAL, config.LOOKBACK)
-    df = pd.DataFrame(raw, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_vol", "trades", "taker_buy_base",
-        "taker_buy_quote", "ignore",
-    ])
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
-    df.set_index("open_time", inplace=True)
-    for col in ["open", "high", "low", "close", "volume", "taker_buy_base"]:
-        df[col] = df[col].astype(float)
-
+    """Returns (base_tf_df, htf_df) using ccxt. Exchange set by EXCHANGE env var."""
+    df     = fetch_binance_data(symbol, config.INTERVAL, config.LOOKBACK)
     htf_df = fetch_htf_data(symbol, config.INTERVAL, config.LOOKBACK)
     return df, htf_df
 

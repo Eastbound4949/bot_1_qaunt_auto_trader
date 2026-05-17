@@ -15,11 +15,13 @@ import pickle
 import warnings
 from datetime import datetime
 
+import time
+
+import ccxt
 import numpy as np
 import pandas as pd
 import ta
 import xgboost as xgb
-from binance.client import Client
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import classification_report, precision_score
 from sklearn.model_selection import TimeSeriesSplit
@@ -47,26 +49,76 @@ HIGHER_TF_MAP = {
 FEATURE_COLS: list[str] = []  # Populated at training time; bot reads from pickle
 
 
-# ─── Data fetch ───────────────────────────────────────────────────────────────
+# ─── Exchange client ──────────────────────────────────────────────────────────
+# EXCHANGE env var controls which exchange to use.
+# "bybit" works from any region including Railway US servers.
+# "binance" works from EU servers or local machines outside US.
 
-def _raw_to_df(raw: list) -> pd.DataFrame:
-    df = pd.DataFrame(raw, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_vol", "trades", "taker_buy_base",
-        "taker_buy_quote", "ignore",
-    ])
+_CCXT_INTERVAL_MAP = {
+    "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+    "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h", "1d": "1d",
+}
+
+
+def _get_exchange() -> ccxt.Exchange:
+    exchange_id = os.environ.get("EXCHANGE", "bybit")
+    exchange_class = getattr(ccxt, exchange_id)
+    params: dict = {"options": {"defaultType": "spot"}}
+    # Only pass credentials if provided (public data doesn't require auth)
+    if config.BINANCE_API_KEY and not config.BINANCE_API_KEY.startswith("YOUR_"):
+        params["apiKey"] = config.BINANCE_API_KEY
+        params["secret"] = config.BINANCE_API_SECRET
+    ex = exchange_class(params)
+    ex.load_markets()
+    return ex
+
+
+def _lookback_to_since_ms(lookback: str) -> int:
+    """Convert '730 day ago UTC' → Unix timestamp in milliseconds."""
+    import re
+    m = re.match(r"(\d+)\s+day", lookback)
+    days = int(m.group(1)) if m else 365
+    return int((time.time() - days * 86400) * 1000)
+
+
+def _ohlcv_to_df(ohlcv: list, symbol: str) -> pd.DataFrame:
+    """Convert ccxt OHLCV list [[ts, o, h, l, c, v], ...] to DataFrame."""
+    df = pd.DataFrame(ohlcv, columns=["open_time", "open", "high", "low", "close", "volume"])
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
     df.set_index("open_time", inplace=True)
-    for col in ["open", "high", "low", "close", "volume", "taker_buy_base"]:
+    for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
+    # taker_buy_base not available via ccxt OHLCV — use 50% volume as neutral proxy
+    df["taker_buy_base"] = df["volume"] * 0.5
     return df[["open", "high", "low", "close", "volume", "taker_buy_base"]]
 
 
+def _fetch_full_ohlcv(exchange: ccxt.Exchange, symbol: str, timeframe: str, since_ms: int) -> pd.DataFrame:
+    """Paginate ccxt fetch_ohlcv until we have all candles since `since_ms`."""
+    # ccxt symbol: 'BTCUSDT' → 'BTC/USDT'
+    ccxt_sym = symbol[:-4] + "/" + symbol[-4:] if symbol.endswith("USDT") else symbol
+    all_ohlcv = []
+    limit = 1000
+    since = since_ms
+    while True:
+        batch = exchange.fetch_ohlcv(ccxt_sym, timeframe, since=since, limit=limit)
+        if not batch:
+            break
+        all_ohlcv.extend(batch)
+        if len(batch) < limit:
+            break
+        since = batch[-1][0] + 1
+        time.sleep(exchange.rateLimit / 1000)
+    return _ohlcv_to_df(all_ohlcv, symbol)
+
+
 def fetch_binance_data(symbol: str, interval: str, lookback: str) -> pd.DataFrame:
-    client = Client(config.BINANCE_API_KEY, config.BINANCE_API_SECRET)
-    raw = client.get_historical_klines(symbol, interval, lookback)
-    df = _raw_to_df(raw)
-    print(f"[trainer] {symbol} {interval}: {len(df)} candles")
+    """Fetch base-TF OHLCV. Exchange determined by EXCHANGE env var."""
+    exchange = _get_exchange()
+    since_ms = _lookback_to_since_ms(lookback)
+    tf = _CCXT_INTERVAL_MAP.get(interval, interval)
+    df = _fetch_full_ohlcv(exchange, symbol, tf, since_ms)
+    print(f"[trainer] {symbol} {interval} ({os.environ.get('EXCHANGE','bybit')}): {len(df)} candles")
     return df
 
 
@@ -75,10 +127,11 @@ def fetch_htf_data(symbol: str, base_interval: str, lookback: str) -> pd.DataFra
     htf = HIGHER_TF_MAP.get(base_interval, base_interval)
     if htf == base_interval:
         return None
-    client = Client(config.BINANCE_API_KEY, config.BINANCE_API_SECRET)
-    raw = client.get_historical_klines(symbol, htf, lookback)
-    df = _raw_to_df(raw)
-    print(f"[trainer] {symbol} {htf} (HTF): {len(df)} candles")
+    exchange = _get_exchange()
+    since_ms = _lookback_to_since_ms(lookback)
+    tf = _CCXT_INTERVAL_MAP.get(htf, htf)
+    df = _fetch_full_ohlcv(exchange, symbol, tf, since_ms)
+    print(f"[trainer] {symbol} {htf} HTF: {len(df)} candles")
     return df
 
 
