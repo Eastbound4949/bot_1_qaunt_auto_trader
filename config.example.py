@@ -17,8 +17,9 @@ TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN",   "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
 # ─── Trading settings ──────────────────────────────────────────────────────────
-# Exchange: "bybit" works from any server/region. "binance" requires non-US IP.
-EXCHANGE = os.environ.get("EXCHANGE", "bybit")
+# kucoin/gateio/kraken work from any IP including Railway US servers.
+# binance/bybit are blocked on US-based servers.
+EXCHANGE = os.environ.get("EXCHANGE", "kucoin")
 SYMBOL   = os.environ.get("SYMBOL",   "BTCUSDT")
 SYMBOLS  = os.environ.get("SYMBOLS",  "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
 INTERVAL = os.environ.get("INTERVAL", "1h")

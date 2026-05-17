@@ -52,25 +52,46 @@ FEATURE_COLS: list[str] = []  # Populated at training time; bot reads from pickl
 # ─── Exchange client ──────────────────────────────────────────────────────────
 # EXCHANGE env var controls which exchange to use.
 # "bybit" works from any region including Railway US servers.
-# "binance" works from EU servers or local machines outside US.
+# Exchange geo-restriction matrix:
+#   binance → blocked on US IPs (Railway US, most VPS)
+#   bybit   → blocked on US IPs via CloudFront
+#   kucoin  → available globally, no geo-restrictions ← Railway default
+#   gateio  → available globally, no geo-restrictions
+#   kraken  → available globally, no geo-restrictions
+# Set EXCHANGE env var in Railway to override.
 
 _CCXT_INTERVAL_MAP = {
     "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
     "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h", "1d": "1d",
 }
 
+# KuCoin symbol format: BTC/USDT (same as our conversion logic) ✓
+# Gate.io symbol format: BTC/USDT ✓
+# Kraken symbol format: BTC/USDT ✓ (for USDT pairs)
+_EXCHANGE_SYMBOL_OVERRIDES: dict[str, dict[str, str]] = {
+    "kraken": {"BTCUSDT": "XBT/USDT", "ETHUSDT": "ETH/USDT", "SOLUSDT": "SOL/USDT"},
+}
+
 
 def _get_exchange() -> ccxt.Exchange:
-    exchange_id = os.environ.get("EXCHANGE", "bybit")
+    exchange_id = os.environ.get("EXCHANGE", "kucoin")
     exchange_class = getattr(ccxt, exchange_id)
-    params: dict = {"options": {"defaultType": "spot"}}
-    # Only pass credentials if provided (public data doesn't require auth)
-    if config.BINANCE_API_KEY and not config.BINANCE_API_KEY.startswith("YOUR_"):
-        params["apiKey"] = config.BINANCE_API_KEY
-        params["secret"] = config.BINANCE_API_SECRET
-    ex = exchange_class(params)
+    # OHLCV is public data — no credentials needed.
+    # Never pass Binance keys to a non-Binance exchange.
+    ex = exchange_class({"options": {"defaultType": "spot"}})
     ex.load_markets()
     return ex
+
+
+def _to_ccxt_symbol(exchange: ccxt.Exchange, symbol: str) -> str:
+    """Convert BTCUSDT → BTC/USDT, with exchange-specific overrides."""
+    exchange_id = exchange.id
+    overrides = _EXCHANGE_SYMBOL_OVERRIDES.get(exchange_id, {})
+    if symbol in overrides:
+        return overrides[symbol]
+    if symbol.endswith("USDT"):
+        return symbol[:-4] + "/USDT"
+    return symbol
 
 
 def _lookback_to_since_ms(lookback: str) -> int:
@@ -95,8 +116,7 @@ def _ohlcv_to_df(ohlcv: list, symbol: str) -> pd.DataFrame:
 
 def _fetch_full_ohlcv(exchange: ccxt.Exchange, symbol: str, timeframe: str, since_ms: int) -> pd.DataFrame:
     """Paginate ccxt fetch_ohlcv until we have all candles since `since_ms`."""
-    # ccxt symbol: 'BTCUSDT' → 'BTC/USDT'
-    ccxt_sym = symbol[:-4] + "/" + symbol[-4:] if symbol.endswith("USDT") else symbol
+    ccxt_sym = _to_ccxt_symbol(exchange, symbol)
     all_ohlcv = []
     limit = 1000
     since = since_ms
@@ -118,7 +138,7 @@ def fetch_binance_data(symbol: str, interval: str, lookback: str) -> pd.DataFram
     since_ms = _lookback_to_since_ms(lookback)
     tf = _CCXT_INTERVAL_MAP.get(interval, interval)
     df = _fetch_full_ohlcv(exchange, symbol, tf, since_ms)
-    print(f"[trainer] {symbol} {interval} ({os.environ.get('EXCHANGE','bybit')}): {len(df)} candles")
+    print(f"[trainer] {symbol} {interval} ({os.environ.get('EXCHANGE','kucoin')}): {len(df)} candles")
     return df
 
 
