@@ -21,6 +21,7 @@ build/
 # Secrets — never commit real keys
 .env
 *.env
+config.py
 
 # OS
 .DS_Store

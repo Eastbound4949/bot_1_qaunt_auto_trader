@@ -24,7 +24,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import config
-from model_trainer import add_features, FEATURE_COLS, train_and_save
+from model_trainer import add_features, train_and_save
 
 
 # ─── Telegram ────────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ def fetch_latest_data():
 # ─── Model loading ────────────────────────────────────────────────────────────
 
 def load_model():
-    """Load the saved ML model from disk."""
+    """Load model + selected feature list from disk. Returns (model, feature_cols)."""
     if not os.path.exists(config.MODEL_FILE):
         print("[bot] No model found — training now...")
         train_and_save()
@@ -67,16 +67,15 @@ def load_model():
     with open(config.MODEL_FILE, "rb") as f:
         payload = pickle.load(f)
 
-    # Auto-retrain if model is too old
     trained_at = datetime.fromisoformat(payload["trained_at"])
     age_days = (datetime.utcnow() - trained_at).days
     if age_days >= config.RETRAIN_DAYS:
         print(f"[bot] Model is {age_days} days old — retraining...")
-        payload = train_and_save()
+        train_and_save()
         with open(config.MODEL_FILE, "rb") as f:
             payload = pickle.load(f)
 
-    return payload["model"]
+    return payload["model"], payload["feature_cols"]
 
 
 # ─── Paper trade state ────────────────────────────────────────────────────────
@@ -204,8 +203,8 @@ def run_bot():
         df = add_features(df)
 
         # 2. Predict on the most recent candle
-        model = load_model()
-        latest = df[FEATURE_COLS].iloc[[-1]]
+        model, feature_cols = load_model()
+        latest = df[feature_cols].iloc[[-1]]
         buy_prob = model.predict_proba(latest)[0][1]
         price    = df["close"].iloc[-1]
 

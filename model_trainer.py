@@ -1,133 +1,272 @@
 """
-model_trainer.py — Fetches data from Binance, trains the ML model, saves it.
-Run this once to create model.pkl, then the bot loads it automatically.
-Re-run every week (or set RETRAIN_DAYS in config.py for auto-retraining).
+model_trainer.py v2 — XGBoost with threshold-based labels, 30+ features,
+lag features, time patterns, feature selection, walk-forward CV.
 
 Usage:
     python model_trainer.py
 """
 
-import pandas as pd
-import numpy as np
 import pickle
-from datetime import datetime
-from binance.client import Client
-from ta.momentum import RSIIndicator
-from ta.trend import MACD
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
 import warnings
-warnings.filterwarnings("ignore")
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+import ta
+import xgboost as xgb
+from binance.client import Client
+from sklearn.metrics import classification_report, precision_score
+from sklearn.model_selection import TimeSeriesSplit
 
 import config
 
+warnings.filterwarnings("ignore")
 
-# ─── Step 1: Fetch OHLCV data from Binance ───────────────────────────────────
+# ─── Label config ─────────────────────────────────────────────────────────────
+LABEL_HORIZON   = 6      # Look ahead N candles
+LABEL_THRESHOLD = 0.008  # Price must rise >0.8% to be labelled BUY
+
+# ─── Top features kept after importance selection ──────────────────────────────
+TOP_N_FEATURES = 25
+
+# Set by add_features(); bot.py reads from pickle payload instead
+FEATURE_COLS = []
+
+
+# ─── Data fetch ───────────────────────────────────────────────────────────────
 
 def fetch_binance_data(symbol, interval, lookback):
-    """Download candle data directly from Binance (free, no subscription)."""
-    print(f"[trainer] Fetching {symbol} {interval} data from Binance...")
     client = Client(config.BINANCE_API_KEY, config.BINANCE_API_SECRET)
-
     raw = client.get_historical_klines(symbol, interval, lookback)
     df = pd.DataFrame(raw, columns=[
-        "open_time","open","high","low","close","volume",
-        "close_time","quote_vol","trades","taker_buy_base",
-        "taker_buy_quote","ignore"
+        "open_time", "open", "high", "low", "close", "volume",
+        "close_time", "quote_vol", "trades", "taker_buy_base",
+        "taker_buy_quote", "ignore",
     ])
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
     df.set_index("open_time", inplace=True)
-
-    for col in ["open","high","low","close","volume"]:
+    for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
-
     print(f"[trainer] Got {len(df)} candles.")
-    return df
+    return df[["open", "high", "low", "close", "volume"]]
 
 
-# ─── Step 2: Feature engineering (same as crypto_model.py) ───────────────────
+# ─── Feature engineering ──────────────────────────────────────────────────────
 
-def add_features(df):
+def add_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
     close = df["close"]
+    high  = df["high"]
+    low   = df["low"]
     vol   = df["volume"]
 
-    df["rsi"]        = RSIIndicator(close=close, window=14).rsi()
-    macd_obj         = MACD(close=close)
-    df["macd"]       = macd_obj.macd()
-    df["macd_signal"] = macd_obj.macd_signal()
-    df["macd_diff"]  = macd_obj.macd_diff()
-    df["vol_ratio"]  = vol / vol.rolling(20).mean()
+    # Momentum
+    df["rsi"]        = ta.momentum.RSIIndicator(close, 14).rsi()
+    df["rsi_6"]      = ta.momentum.RSIIndicator(close, 6).rsi()
+    df["stoch_k"]    = ta.momentum.StochasticOscillator(high, low, close).stoch()
+    df["stoch_d"]    = ta.momentum.StochasticOscillator(high, low, close).stoch_signal()
+    df["cci"]        = ta.trend.CCIIndicator(high, low, close).cci()
+    df["williams_r"] = ta.momentum.WilliamsRIndicator(high, low, close).williams_r()
+    df["mfi"]        = ta.volume.MFIIndicator(high, low, close, vol).money_flow_index()
+
+    # Trend
+    macd = ta.trend.MACD(close)
+    df["macd"]        = macd.macd()
+    df["macd_signal"] = macd.macd_signal()
+    df["macd_diff"]   = macd.macd_diff()
+    adx = ta.trend.ADXIndicator(high, low, close)
+    df["adx"]         = adx.adx()
+    df["adx_pos"]     = adx.adx_pos()
+    df["adx_neg"]     = adx.adx_neg()
+    df["ema_9"]       = ta.trend.EMAIndicator(close, 9).ema_indicator()
+    df["ema_21"]      = ta.trend.EMAIndicator(close, 21).ema_indicator()
+    df["ema_50"]      = ta.trend.EMAIndicator(close, 50).ema_indicator()
+
+    # Volatility
+    bb = ta.volatility.BollingerBands(close, 20)
+    df["bb_upper"] = bb.bollinger_hband()
+    df["bb_lower"] = bb.bollinger_lband()
+    df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / bb.bollinger_mavg()
+    df["bb_pos"]   = (close - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"] + 1e-9)
+    df["atr"]      = ta.volatility.AverageTrueRange(high, low, close).average_true_range()
+    df["atr_pct"]  = df["atr"] / close
+
+    # Volume
+    df["vol_ratio"] = vol / vol.rolling(20).mean()
+    df["vol_z"]     = (vol - vol.rolling(20).mean()) / (vol.rolling(20).std() + 1e-9)
+    obv = ta.volume.OnBalanceVolumeIndicator(close, vol).on_balance_volume()
+    df["obv_diff"]  = (obv - obv.ewm(span=20).mean()) / (obv.ewm(span=20).mean().abs() + 1e-9)
+
+    # Price-derived
     df["returns"]    = close.pct_change()
-    df["volatility"] = df["returns"].rolling(14).std()
-    df["ma_20"]      = close.rolling(20).mean()
-    df["ma_50"]      = close.rolling(50).mean()
-    df["price_vs_20"] = (close - df["ma_20"]) / df["ma_20"]
-    df["price_vs_50"] = (close - df["ma_50"]) / df["ma_50"]
-    df["ret_1d"]     = close.pct_change(1)
-    df["ret_3d"]     = close.pct_change(3)
-    df["ret_5d"]     = close.pct_change(5)
+    df["log_ret"]    = np.log(close / close.shift(1))
+    df["range_pct"]  = (high - low) / close
+    df["body_pct"]   = (close - df["open"]).abs() / (high - low + 1e-9)
+    df["upper_wick"] = (high - np.maximum(close, df["open"])) / (high - low + 1e-9)
+    df["lower_wick"] = (np.minimum(close, df["open"]) - low) / (high - low + 1e-9)
+
+    # Price vs EMAs (normalized)
+    df["price_vs_ema9"]  = (close - df["ema_9"])  / df["ema_9"]
+    df["price_vs_ema21"] = (close - df["ema_21"]) / df["ema_21"]
+    df["price_vs_ema50"] = (close - df["ema_50"]) / df["ema_50"]
+
+    # Multi-period returns
+    df["ret_3"]  = close.pct_change(3)
+    df["ret_6"]  = close.pct_change(6)
+    df["ret_12"] = close.pct_change(12)
+    df["ret_24"] = close.pct_change(24)
+
+    # Rolling stats
+    df["ret_mean_12"] = df["returns"].rolling(12).mean()
+    df["ret_std_12"]  = df["returns"].rolling(12).std()
+    df["ret_mean_24"] = df["returns"].rolling(24).mean()
+
+    # Time features — crypto has strong hourly/daily patterns
+    df["hour_sin"] = np.sin(2 * np.pi * df.index.hour / 24)
+    df["hour_cos"] = np.cos(2 * np.pi * df.index.hour / 24)
+    df["dow_sin"]  = np.sin(2 * np.pi * df.index.dayofweek / 7)
+    df["dow_cos"]  = np.cos(2 * np.pi * df.index.dayofweek / 7)
+
+    # Lag features — short-term momentum memory
+    for col in ["rsi", "macd_diff", "vol_ratio", "returns", "bb_pos"]:
+        for lag in [1, 2, 3]:
+            df[f"{col}_lag{lag}"] = df[col].shift(lag)
 
     df.dropna(inplace=True)
     return df
 
 
-FEATURE_COLS = [
-    "rsi", "macd", "macd_signal", "macd_diff",
-    "vol_ratio", "volatility",
-    "price_vs_20", "price_vs_50",
-    "ret_1d", "ret_3d", "ret_5d",
-]
+# ─── Labels ───────────────────────────────────────────────────────────────────
+
+def add_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    1 = price rises >LABEL_THRESHOLD% within next LABEL_HORIZON candles
+    0 = otherwise
+
+    Using max future return instead of next-candle direction filters noise
+    and focuses on meaningful moves the bot can actually profit from.
+    """
+    future_max = pd.Series(np.nan, index=df.index)
+    for i in range(1, LABEL_HORIZON + 1):
+        ret = df["close"].shift(-i) / df["close"] - 1
+        future_max = np.fmax(future_max, ret)
+
+    df["label"] = (future_max > LABEL_THRESHOLD).astype(int)
+    df.dropna(subset=["label"], inplace=True)
+    return df.iloc[:-LABEL_HORIZON]  # Last N rows have no future data
 
 
-# ─── Step 3: Add labels ───────────────────────────────────────────────────────
+# ─── Feature selection ────────────────────────────────────────────────────────
 
-def add_labels(df, forward_periods=1):
-    df["label"] = (df["close"].shift(-forward_periods) > df["close"]).astype(int)
-    df = df.iloc[:-forward_periods]
-    return df
+def _select_top_features(model, cols, top_n):
+    imp = model.feature_importances_
+    idx = np.argsort(imp)[::-1][:top_n]
+    selected = [cols[i] for i in idx]
+    print(f"\n[trainer] Top 10 features by importance:")
+    for rank, col in enumerate(selected[:10], 1):
+        print(f"  {rank:2d}. {col:30s} {imp[idx[rank-1]]:.4f}")
+    return selected
 
 
-# ─── Step 4: Train & save ─────────────────────────────────────────────────────
+# ─── Walk-forward precision ───────────────────────────────────────────────────
+
+def _walk_forward_precision(X: pd.DataFrame, y: pd.Series, n_splits=5) -> tuple:
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    scores = []
+    for train_idx, test_idx in tscv.split(X):
+        X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
+        y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
+        pos_w = float((y_tr == 0).sum()) / float((y_tr == 1).sum() + 1e-9)
+        m = xgb.XGBClassifier(
+            n_estimators=300, max_depth=5, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8,
+            scale_pos_weight=pos_w, eval_metric="logloss",
+            random_state=42, verbosity=0,
+        )
+        m.fit(X_tr, y_tr)
+        preds = m.predict(X_te)
+        scores.append(precision_score(y_te, preds, pos_label=1, zero_division=0))
+    return float(np.mean(scores)), float(np.std(scores))
+
+
+# ─── Train & save ─────────────────────────────────────────────────────────────
 
 def train_and_save():
+    print(f"[trainer] Fetching {config.SYMBOL} {config.INTERVAL} | {config.LOOKBACK}...")
     df = fetch_binance_data(config.SYMBOL, config.INTERVAL, config.LOOKBACK)
+
+    print("[trainer] Engineering features...")
     df = add_features(df)
     df = add_labels(df)
 
-    X = df[FEATURE_COLS]
+    skip = ["label", "open", "high", "low", "close", "volume"]
+    all_cols = [c for c in df.columns if c not in skip]
+
+    X = df[all_cols]
     y = df["label"]
+    print(f"[trainer] Rows: {len(df)} | BUY rate: {y.mean():.1%} | Features: {len(all_cols)}")
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, shuffle=False
+    split = int(len(X) * 0.8)
+    X_tr, X_te = X.iloc[:split], X.iloc[split:]
+    y_tr, y_te = y.iloc[:split], y.iloc[split:]
+
+    pos_w = float((y_tr == 0).sum()) / float((y_tr == 1).sum() + 1e-9)
+
+    # Pass 1: all features, get importances
+    m1 = xgb.XGBClassifier(
+        n_estimators=500, max_depth=5, learning_rate=0.03,
+        subsample=0.8, colsample_bytree=0.7,
+        min_child_weight=5, gamma=1,
+        reg_alpha=0.1, reg_lambda=1,
+        scale_pos_weight=pos_w,
+        eval_metric="logloss", random_state=42, verbosity=0,
+        early_stopping_rounds=50,
     )
+    m1.fit(X_tr, y_tr, eval_set=[(X_te, y_te)], verbose=False)
 
-    model = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=6,
-        min_samples_leaf=10,
-        random_state=42,
-        class_weight="balanced",
+    selected = _select_top_features(m1, all_cols, TOP_N_FEATURES)
+
+    # Pass 2: retrain on selected features only
+    m2 = xgb.XGBClassifier(
+        n_estimators=m1.best_iteration + 1,
+        max_depth=5, learning_rate=0.03,
+        subsample=0.8, colsample_bytree=0.7,
+        min_child_weight=5, gamma=1,
+        reg_alpha=0.1, reg_lambda=1,
+        scale_pos_weight=pos_w,
+        eval_metric="logloss", random_state=42, verbosity=0,
     )
-    model.fit(X_train, y_train)
+    m2.fit(X_tr[selected], y_tr)
 
-    y_pred = model.predict(X_test)
-    acc = (y_pred == y_test).mean() * 100
-    print(f"\n[trainer] Test accuracy: {acc:.1f}%")
-    print(classification_report(y_test, y_pred, target_names=["SELL","BUY"]))
+    y_pred = m2.predict(X_te[selected])
+    y_prob = m2.predict_proba(X_te[selected])[:, 1]
 
-    # Save model + metadata
+    print(f"\n[trainer] === Hold-out test set ===")
+    print(classification_report(y_te, y_pred, target_names=["HOLD", "BUY"]))
+
+    # High-confidence precision — what the bot actually trades
+    hc = y_prob >= config.BUY_THRESHOLD
+    if hc.sum() > 0:
+        hc_prec = (y_te[hc] == 1).mean()
+        print(f"High-confidence BUY precision (prob>={config.BUY_THRESHOLD:.0%}): "
+              f"{hc_prec:.1%}  on {hc.sum()} signals")
+
+    print(f"\n[trainer] Walk-forward precision (5-fold)...")
+    wf_mean, wf_std = _walk_forward_precision(X[selected], y)
+    print(f"  BUY precision: {wf_mean:.1%} ± {wf_std:.1%}")
+
     payload = {
-        "model":        model,
-        "feature_cols": FEATURE_COLS,
-        "trained_at":   datetime.utcnow().isoformat(),
-        "accuracy":     round(acc, 2),
-        "symbol":       config.SYMBOL,
+        "model":            m2,
+        "feature_cols":     selected,
+        "trained_at":       datetime.utcnow().isoformat(),
+        "label_horizon":    LABEL_HORIZON,
+        "label_threshold":  LABEL_THRESHOLD,
+        "symbol":           config.SYMBOL,
     }
     with open(config.MODEL_FILE, "wb") as f:
         pickle.dump(payload, f)
 
-    print(f"[trainer] Model saved to {config.MODEL_FILE}")
+    print(f"\n[trainer] Saved → {config.MODEL_FILE}")
     return payload
 
 
