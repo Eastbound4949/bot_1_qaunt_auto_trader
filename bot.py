@@ -111,7 +111,7 @@ class PaperTrader:
                      ML SELL signal also exits
     """
 
-    _log_file = os.path.join(_BOT_DIR, self._log_file)
+    _log_file = os.path.join(_BOT_DIR, config.LOG_FILE)
 
     def __init__(self):
         self.balance         = config.PAPER_STARTING_BALANCE
