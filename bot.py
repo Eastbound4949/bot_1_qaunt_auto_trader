@@ -15,7 +15,7 @@ import os
 import pickle
 from datetime import datetime
 
-_BOT_DIR = os.path.dirname(os.path.abspath(__file__))
+_BOT_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 import pandas as pd

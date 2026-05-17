@@ -10,6 +10,7 @@ Upgrades over v2:
   - Shorter label horizon (4 candles) and higher threshold (1%) for precision
 """
 
+import os
 import pickle
 import warnings
 from datetime import datetime
@@ -364,7 +365,9 @@ def _walk_forward_precision(
 
 # ─── Model file helper ────────────────────────────────────────────────────────
 
-_BOT_DIR = os.path.dirname(os.path.abspath(__file__))
+# DATA_DIR env var → Railway volume path (e.g. /data).
+# Falls back to script directory so local usage is unchanged.
+_BOT_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
 
 def model_file_for(symbol: str) -> str:
     name = f"model_{symbol}_{config.INTERVAL}.pkl" if len(config.SYMBOLS) > 1 else config.MODEL_FILE
