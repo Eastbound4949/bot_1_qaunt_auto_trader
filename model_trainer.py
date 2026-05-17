@@ -15,6 +15,7 @@ import pandas as pd
 import ta
 import xgboost as xgb
 from binance.client import Client
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import classification_report, precision_score
 from sklearn.model_selection import TimeSeriesSplit
 
@@ -24,7 +25,7 @@ warnings.filterwarnings("ignore")
 
 # ─── Label config ─────────────────────────────────────────────────────────────
 LABEL_HORIZON   = 6      # Look ahead N candles
-LABEL_THRESHOLD = 0.008  # Price must rise >0.8% to be labelled BUY
+LABEL_THRESHOLD = 0.005  # Price must rise >0.5% to be labelled BUY
 
 # ─── Top features kept after importance selection ──────────────────────────────
 TOP_N_FEATURES = 25
@@ -176,12 +177,11 @@ def _walk_forward_precision(X: pd.DataFrame, y: pd.Series, n_splits=5) -> tuple:
     for train_idx, test_idx in tscv.split(X):
         X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
         y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
-        pos_w = float((y_tr == 0).sum()) / float((y_tr == 1).sum() + 1e-9)
         m = xgb.XGBClassifier(
-            n_estimators=300, max_depth=5, learning_rate=0.05,
+            n_estimators=300, max_depth=4, learning_rate=0.05,
             subsample=0.8, colsample_bytree=0.8,
-            scale_pos_weight=pos_w, eval_metric="logloss",
-            random_state=42, verbosity=0,
+            min_child_weight=10, gamma=2,
+            eval_metric="logloss", random_state=42, verbosity=0,
         )
         m.fit(X_tr, y_tr)
         preds = m.predict(X_te)
@@ -210,15 +210,12 @@ def train_and_save():
     X_tr, X_te = X.iloc[:split], X.iloc[split:]
     y_tr, y_te = y.iloc[:split], y.iloc[split:]
 
-    pos_w = float((y_tr == 0).sum()) / float((y_tr == 1).sum() + 1e-9)
-
-    # Pass 1: all features, get importances
+    # Pass 1: all features, get importances (no pos_weight — keeps probs calibrated)
     m1 = xgb.XGBClassifier(
-        n_estimators=500, max_depth=5, learning_rate=0.03,
+        n_estimators=500, max_depth=4, learning_rate=0.03,
         subsample=0.8, colsample_bytree=0.7,
-        min_child_weight=5, gamma=1,
-        reg_alpha=0.1, reg_lambda=1,
-        scale_pos_weight=pos_w,
+        min_child_weight=10, gamma=2,
+        reg_alpha=0.5, reg_lambda=2,
         eval_metric="logloss", random_state=42, verbosity=0,
         early_stopping_rounds=50,
     )
@@ -229,34 +226,41 @@ def train_and_save():
     # Pass 2: retrain on selected features only
     m2 = xgb.XGBClassifier(
         n_estimators=m1.best_iteration + 1,
-        max_depth=5, learning_rate=0.03,
+        max_depth=4, learning_rate=0.03,
         subsample=0.8, colsample_bytree=0.7,
-        min_child_weight=5, gamma=1,
-        reg_alpha=0.1, reg_lambda=1,
-        scale_pos_weight=pos_w,
+        min_child_weight=10, gamma=2,
+        reg_alpha=0.5, reg_lambda=2,
         eval_metric="logloss", random_state=42, verbosity=0,
     )
     m2.fit(X_tr[selected], y_tr)
 
-    y_pred = m2.predict(X_te[selected])
-    y_prob = m2.predict_proba(X_te[selected])[:, 1]
+    # Calibrate probabilities so confidence scores are meaningful
+    # cv=3 uses 3-fold internal CV on training data
+    calibrated = CalibratedClassifierCV(m2, cv=3, method="isotonic")
+    calibrated.fit(X_tr[selected], y_tr)
+
+    y_pred = calibrated.predict(X_te[selected])
+    y_prob = calibrated.predict_proba(X_te[selected])[:, 1]
 
     print(f"\n[trainer] === Hold-out test set ===")
     print(classification_report(y_te, y_pred, target_names=["HOLD", "BUY"]))
 
-    # High-confidence precision — what the bot actually trades
-    hc = y_prob >= config.BUY_THRESHOLD
-    if hc.sum() > 0:
-        hc_prec = (y_te[hc] == 1).mean()
-        print(f"High-confidence BUY precision (prob>={config.BUY_THRESHOLD:.0%}): "
-              f"{hc_prec:.1%}  on {hc.sum()} signals")
+    # Precision at multiple thresholds — find the tradeable zone
+    print(f"\n[trainer] Precision by confidence threshold:")
+    print(f"  {'Threshold':>10} {'Precision':>10} {'Signals':>10} {'Coverage':>10}")
+    for thresh in [0.50, 0.55, 0.60, 0.65, 0.70, 0.75]:
+        mask = y_prob >= thresh
+        if mask.sum() > 0:
+            prec = (y_te[mask] == 1).mean()
+            cov  = mask.sum() / len(y_te)
+            print(f"  {thresh:>10.0%} {prec:>10.1%} {mask.sum():>10d} {cov:>10.1%}")
 
     print(f"\n[trainer] Walk-forward precision (5-fold)...")
     wf_mean, wf_std = _walk_forward_precision(X[selected], y)
     print(f"  BUY precision: {wf_mean:.1%} ± {wf_std:.1%}")
 
     payload = {
-        "model":            m2,
+        "model":            calibrated,
         "feature_cols":     selected,
         "trained_at":       datetime.utcnow().isoformat(),
         "label_horizon":    LABEL_HORIZON,
@@ -266,7 +270,7 @@ def train_and_save():
     with open(config.MODEL_FILE, "wb") as f:
         pickle.dump(payload, f)
 
-    print(f"\n[trainer] Saved → {config.MODEL_FILE}")
+    print(f"\n[trainer] Saved -> {config.MODEL_FILE}")
     return payload
 
 
