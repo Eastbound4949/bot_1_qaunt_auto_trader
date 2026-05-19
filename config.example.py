@@ -21,11 +21,11 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 # binance/bybit are blocked on US-based servers.
 EXCHANGE = os.environ.get("EXCHANGE", "kucoin")
 SYMBOL   = os.environ.get("SYMBOL",   "BTCUSDT")
-SYMBOLS  = os.environ.get("SYMBOLS",  "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
+SYMBOLS  = os.environ.get("SYMBOLS",  "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,AVAXUSDT,DOGEUSDT,LINKUSDT,ADAUSDT,DOTUSDT").split(",")
 INTERVAL = os.environ.get("INTERVAL", "1h")
 LOOKBACK = os.environ.get("LOOKBACK", "730 day ago UTC")
 
-BUY_THRESHOLD  = float(os.environ.get("BUY_THRESHOLD",  "0.58"))
+BUY_THRESHOLD  = float(os.environ.get("BUY_THRESHOLD",  "0.50"))
 SELL_THRESHOLD = float(os.environ.get("SELL_THRESHOLD", "0.38"))
 
 # ─── Risk management ───────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ LOG_FILE               = os.environ.get("LOG_FILE", "trades_log.csv")
 TREND_FILTER        = os.environ.get("TREND_FILTER",       "true").lower() == "true"
 ADX_TREND_THRESHOLD = int(os.environ.get("ADX_TREND_THRESHOLD", "20"))
 EMA_ALIGN_THRESHOLD = int(os.environ.get("EMA_ALIGN_THRESHOLD", "2"))
-REQUIRE_HTF_TREND   = os.environ.get("REQUIRE_HTF_TREND",  "true").lower() == "true"
+REQUIRE_HTF_TREND   = os.environ.get("REQUIRE_HTF_TREND",  "false").lower() == "true"
 
 # ─── Model ─────────────────────────────────────────────────────────────────────
 MODEL_FILE   = "model.pkl"

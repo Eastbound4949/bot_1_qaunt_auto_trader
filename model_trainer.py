@@ -69,7 +69,12 @@ _CCXT_INTERVAL_MAP = {
 # Gate.io symbol format: BTC/USDT ✓
 # Kraken symbol format: BTC/USDT ✓ (for USDT pairs)
 _EXCHANGE_SYMBOL_OVERRIDES: dict[str, dict[str, str]] = {
-    "kraken": {"BTCUSDT": "XBT/USDT", "ETHUSDT": "ETH/USDT", "SOLUSDT": "SOL/USDT"},
+    "kraken": {
+        "BTCUSDT": "XBT/USDT",  "ETHUSDT": "ETH/USDT",  "SOLUSDT":  "SOL/USDT",
+        "BNBUSDT": "BNB/USDT",  "XRPUSDT": "XRP/USDT",  "AVAXUSDT": "AVAX/USDT",
+        "DOGEUSDT": "DOGE/USDT","LINKUSDT": "LINK/USDT", "ADAUSDT":  "ADA/USDT",
+        "DOTUSDT": "DOT/USDT",
+    },
 }
 
 
