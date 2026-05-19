@@ -25,8 +25,11 @@ SYMBOLS  = os.environ.get("SYMBOLS",  "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,A
 INTERVAL = os.environ.get("INTERVAL", "1h")
 LOOKBACK = os.environ.get("LOOKBACK", "730 day ago UTC")
 
-BUY_THRESHOLD  = float(os.environ.get("BUY_THRESHOLD",  "0.50"))
-SELL_THRESHOLD = float(os.environ.get("SELL_THRESHOLD", "0.38"))
+BUY_THRESHOLD    = float(os.environ.get("BUY_THRESHOLD",    "0.50"))
+SELL_THRESHOLD   = float(os.environ.get("SELL_THRESHOLD",   "0.38"))
+SHORT_THRESHOLD  = float(os.environ.get("SHORT_THRESHOLD",  "0.50"))
+COVER_THRESHOLD  = float(os.environ.get("COVER_THRESHOLD",  "0.38"))
+ENABLE_SHORTING  = os.environ.get("ENABLE_SHORTING", "false").lower() == "true"
 
 # ─── Risk management ───────────────────────────────────────────────────────────
 PAPER_STARTING_BALANCE = float(os.environ.get("PAPER_STARTING_BALANCE", "10000"))

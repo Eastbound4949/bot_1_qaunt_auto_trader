@@ -46,6 +46,26 @@ for sym in symbols:
         print(f"[setup] {sym} model found: {mf}")
 EOF
 
+# ── Step 3b: Train short models if ENABLE_SHORTING=true ──────────────────────
+python - <<'EOF'
+import os, sys
+sys.path.insert(0, ".")
+import config
+if not config.ENABLE_SHORTING:
+    print("[setup] Shorting disabled — skipping short model training.")
+    sys.exit(0)
+from model_trainer import short_model_file_for, train_and_save_short
+
+for sym in config.SYMBOLS:
+    mf = short_model_file_for(sym)
+    if not os.path.exists(mf):
+        print(f"[setup] Short model missing for {sym} — training now...")
+        train_and_save_short(sym, mf)
+        print(f"[setup] {sym} short model ready.")
+    else:
+        print(f"[setup] {sym} short model found: {mf}")
+EOF
+
 # ── Step 4: Start the bot ─────────────────────────────────────────────────────
 echo "[setup] All models ready. Starting bot..."
 python bot.py

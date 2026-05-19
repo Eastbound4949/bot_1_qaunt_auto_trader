@@ -412,9 +412,10 @@ def _select_top_features(model, cols: list, top_n: int) -> list:
 # ─── Walk-forward validation ──────────────────────────────────────────────────
 
 def _walk_forward_precision(
-    X: pd.DataFrame, y: pd.Series, n_splits: int = 5
+    X: pd.DataFrame, y: pd.Series, n_splits: int = 5, threshold: float | None = None
 ) -> tuple[float, float, float]:
     """Returns (precision_default, precision_at_threshold, std_default)."""
+    th = threshold if threshold is not None else config.BUY_THRESHOLD
     tscv = TimeSeriesSplit(n_splits=n_splits)
     scores_default, scores_thresh = [], []
     for train_idx, test_idx in tscv.split(X):
@@ -432,7 +433,7 @@ def _walk_forward_precision(
         m.fit(X_tr, y_tr, sample_weight=w_tr)
         preds   = m.predict(X_te)
         probs   = m.predict_proba(X_te)[:, 1]
-        mask_th = probs >= config.BUY_THRESHOLD
+        mask_th = probs >= th
         scores_default.append(precision_score(y_te, preds, pos_label=1, zero_division=0))
         if mask_th.sum() > 0:
             scores_thresh.append((y_te[mask_th] == 1).mean())
@@ -450,6 +451,35 @@ _BOT_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__))
 def model_file_for(symbol: str) -> str:
     name = f"model_{symbol}_{config.INTERVAL}.pkl" if len(config.SYMBOLS) > 1 else config.MODEL_FILE
     return os.path.join(_BOT_DIR, name)
+
+
+def short_model_file_for(symbol: str) -> str:
+    return os.path.join(_BOT_DIR, f"short_model_{symbol}_{config.INTERVAL}.pkl")
+
+
+# ─── Short labels ─────────────────────────────────────────────────────────────
+
+def add_short_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    SHORT (1) when ALL of:
+    1. Price falls > LABEL_THRESHOLD% at exactly LABEL_HORIZON candles ahead
+    2. Price never rallies > STOP_LOSS_THRESHOLD during the hold window (no stop-out)
+    """
+    close   = df["close"]
+    fwd_ret = close.shift(-LABEL_HORIZON) / close - 1
+
+    max_fwd = pd.Series(-np.inf, index=df.index)
+    for i in range(1, LABEL_HORIZON + 1):
+        ret = close.shift(-i) / close - 1
+        max_fwd = np.fmax(max_fwd, ret)
+
+    df["label"] = (
+        (fwd_ret < -LABEL_THRESHOLD) &
+        (max_fwd < STOP_LOSS_THRESHOLD)
+    ).astype(int)
+
+    df.dropna(subset=["label"], inplace=True)
+    return df.iloc[:-LABEL_HORIZON]
 
 
 # ─── Train & save ─────────────────────────────────────────────────────────────
@@ -571,6 +601,118 @@ def train_and_save(symbol: str | None = None, model_file: str | None = None) -> 
         pickle.dump(payload, f)
 
     print(f"\n[trainer] Saved -> {mf}  (walk-fwd precision: {wf_mean:.1%})")
+    return payload
+
+
+def train_and_save_short(symbol: str | None = None, model_file: str | None = None) -> dict:
+    """Train a SHORT/bearish model using inverted labels. Same architecture as BUY model."""
+    sym = symbol or config.SYMBOL
+    mf  = model_file or short_model_file_for(sym)
+
+    print(f"[trainer] Fetching {sym} {config.INTERVAL} | {config.LOOKBACK}...")
+    df = fetch_binance_data(sym, config.INTERVAL, config.LOOKBACK)
+
+    print("[trainer] Fetching higher-TF data...")
+    htf_df = fetch_htf_data(sym, config.INTERVAL, config.LOOKBACK)
+
+    print("[trainer] Engineering features (SHORT labels)...")
+    df = add_features(df, htf_df)
+    df = add_short_labels(df)
+
+    skip = {
+        "label", "open", "high", "low", "close", "volume", "taker_buy_base",
+        "ema_9", "ema_21", "ema_50", "ema_200",
+        "bb_upper", "bb_lower",
+        "macd", "macd_signal",
+        "atr",
+    }
+    all_cols = [c for c in df.columns if c not in skip]
+
+    X = df[all_cols]
+    y = df["label"]
+    print(f"[trainer] Rows: {len(df)} | SHORT rate: {y.mean():.1%} | Features: {len(all_cols)}")
+
+    n = len(X)
+    tr_end  = int(n * 0.70)
+    val_end = int(n * 0.85)
+    X_tr,  y_tr  = X.iloc[:tr_end],       y.iloc[:tr_end]
+    X_val, y_val = X.iloc[tr_end:val_end], y.iloc[tr_end:val_end]
+    X_te,  y_te  = X.iloc[val_end:],       y.iloc[val_end:]
+
+    pos_weight = (y_tr == 0).sum() / max((y_tr == 1).sum(), 1)
+    w_tr = recency_weights(len(y_tr))
+    print(f"[trainer] scale_pos_weight: {pos_weight:.1f} | "
+          f"train={len(y_tr)} val={len(y_val)} test={len(y_te)}")
+
+    m1 = xgb.XGBClassifier(
+        n_estimators=600, max_depth=3, learning_rate=0.03,
+        subsample=0.8, colsample_bytree=0.7,
+        min_child_weight=8, gamma=2,
+        reg_alpha=0.5, reg_lambda=2,
+        scale_pos_weight=pos_weight,
+        eval_metric="logloss", random_state=42, verbosity=0,
+        early_stopping_rounds=50,
+    )
+    m1.fit(X_tr, y_tr, sample_weight=w_tr, eval_set=[(X_val, y_val)], verbose=False)
+    selected = _select_top_features(m1, all_cols, TOP_N_FEATURES)
+
+    X_tv = pd.concat([X_tr, X_val])
+    y_tv = pd.concat([y_tr, y_val])
+    w_tv = recency_weights(len(y_tv))
+    m2 = xgb.XGBClassifier(
+        n_estimators=m1.best_iteration + 1,
+        max_depth=3, learning_rate=0.03,
+        subsample=0.8, colsample_bytree=0.7,
+        min_child_weight=8, gamma=2,
+        reg_alpha=0.5, reg_lambda=2,
+        scale_pos_weight=pos_weight,
+        eval_metric="logloss", random_state=42, verbosity=0,
+    )
+    m2.fit(X_tv[selected], y_tv, sample_weight=w_tv)
+
+    calibrated = _IsotonicCalibrated(m2)
+    if int(y_te.sum()) >= 10:
+        calibrated.fit(X_te[selected], y_te)
+        print("[trainer] Isotonic calibration fitted on test set.")
+    else:
+        print("[trainer] Skipping calibration (too few SHORT samples in test set)")
+
+    y_pred = calibrated.predict(X_te[selected])
+    y_prob = calibrated.predict_proba(X_te[selected])[:, 1]
+
+    print(f"\n[trainer] === Hold-out test SHORT (honest — zero leakage) ===")
+    print(classification_report(y_te, y_pred, target_names=["HOLD", "SHORT"]))
+
+    print(f"\n[trainer] Precision by confidence threshold (TRUE out-of-sample):")
+    print(f"  {'Threshold':>10} {'Precision':>10} {'Signals':>10} {'Coverage':>10}")
+    for thresh in [0.50, 0.55, 0.60, 0.62, 0.65, 0.70, 0.75, 0.80]:
+        mask = y_prob >= thresh
+        if mask.sum() > 0:
+            prec = (y_te[mask] == 1).mean()
+            cov  = mask.sum() / len(y_te)
+            flag = " ← TARGET" if thresh == config.SHORT_THRESHOLD else ""
+            print(f"  {thresh:>10.0%} {prec:>10.1%} {mask.sum():>10d} {cov:>10.1%}{flag}")
+
+    print(f"\n[trainer] Walk-forward precision (5-fold)...")
+    _, wf_thr, wf_std = _walk_forward_precision(X[selected], y, threshold=config.SHORT_THRESHOLD)
+    break_even = 1.0 / (1.0 + config.TAKE_PROFIT_ATR_MULT / config.TRAIL_STOP_ATR_MULT)
+    flag = "ok" if wf_thr >= break_even else f"LOSING (need >{break_even:.0%})"
+    print(f"  @ SHORT threshold {config.SHORT_THRESHOLD:.0%}: {wf_thr:.1%} ± {wf_std:.1%}  [{flag}]")
+
+    payload = {
+        "model":              calibrated,
+        "feature_cols":       selected,
+        "trained_at":         datetime.utcnow().isoformat(),
+        "label_horizon":      LABEL_HORIZON,
+        "label_threshold":    LABEL_THRESHOLD,
+        "symbol":             sym,
+        "model_type":         "short",
+        "walk_fwd_precision": wf_thr,
+    }
+    with open(mf, "wb") as f:
+        pickle.dump(payload, f)
+
+    print(f"\n[trainer] Saved (SHORT) -> {mf}  (walk-fwd precision: {wf_thr:.1%})")
     return payload
 
 
