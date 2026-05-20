@@ -40,8 +40,11 @@ for sym in symbols:
     mf = model_file_for(sym)
     if not os.path.exists(mf):
         print(f"[setup] Model missing for {sym} — training now (this takes ~10 min per pair)...")
-        train_and_save(sym, mf)
-        print(f"[setup] {sym} model ready.")
+        try:
+            train_and_save(sym, mf)
+            print(f"[setup] {sym} model ready.")
+        except Exception as e:
+            print(f"[setup] WARNING: {sym} training failed ({e}) — skipping.")
     else:
         print(f"[setup] {sym} model found: {mf}")
 EOF
@@ -60,8 +63,11 @@ for sym in config.SYMBOLS:
     mf = short_model_file_for(sym)
     if not os.path.exists(mf):
         print(f"[setup] Short model missing for {sym} — training now...")
-        train_and_save_short(sym, mf)
-        print(f"[setup] {sym} short model ready.")
+        try:
+            train_and_save_short(sym, mf)
+            print(f"[setup] {sym} short model ready.")
+        except Exception as e:
+            print(f"[setup] WARNING: {sym} short training failed ({e}) — skipping.")
     else:
         print(f"[setup] {sym} short model found: {mf}")
 EOF

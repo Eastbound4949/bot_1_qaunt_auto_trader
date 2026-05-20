@@ -21,7 +21,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 # binance/bybit are blocked on US-based servers.
 EXCHANGE = os.environ.get("EXCHANGE", "kucoin")
 SYMBOL   = os.environ.get("SYMBOL",   "BTCUSDT")
-SYMBOLS  = os.environ.get("SYMBOLS",  "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,AVAXUSDT,DOGEUSDT,LINKUSDT,ADAUSDT,DOTUSDT").split(",")
+SYMBOLS  = os.environ.get("SYMBOLS",  "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,AVAXUSDT,DOGEUSDT,UNIUSDT,ADAUSDT,DOTUSDT").split(",")
 INTERVAL = os.environ.get("INTERVAL", "1h")
 LOOKBACK = os.environ.get("LOOKBACK", "730 day ago UTC")
 
