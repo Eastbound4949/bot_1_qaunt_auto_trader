@@ -289,7 +289,13 @@ class PaperTrader:
         if signal == "SHORT" and self.short_position == 0 and self.position == 0 and self.balance > 10:
             portfolio_val  = self.portfolio_value(price)
             risk_amount    = portfolio_val * config.RISK_PER_TRADE
+            # When hard stop (STOP_LOSS_PCT) is wider than ATR-based stop, TP must
+            # scale with it — otherwise R:R collapses below 1:1 on low-ATR pairs.
             stop_distance  = max(config.TRAIL_STOP_ATR_MULT * atr, price * config.STOP_LOSS_PCT)
+            tp_distance    = max(config.TAKE_PROFIT_ATR_MULT * atr, stop_distance * config.MIN_RR_RATIO)
+            rr             = tp_distance / stop_distance
+            if rr < config.MIN_RR_RATIO:
+                return f"HOLD — SHORT R:R {rr:.2f}:1 below min {config.MIN_RR_RATIO}"
             position_units = risk_amount / stop_distance
             notional       = position_units * price
             notional       = min(notional, self.balance * config.MAX_POSITION_PCT)
@@ -298,7 +304,7 @@ class PaperTrader:
             self.short_position    = position_units
             self.balance          += notional          # receive proceeds from short sale
             self.short_entry_price = price
-            self.short_take_profit = price - config.TAKE_PROFIT_ATR_MULT * atr
+            self.short_take_profit = price - tp_distance
             self.short_trail_stop  = price + config.TRAIL_STOP_ATR_MULT * atr
             self.short_symbol      = symbol
             self.trades           += 1
@@ -307,6 +313,7 @@ class PaperTrader:
                 f"SHORTED {position_units:.6f} {symbol} @ ${price:,.2f} | "
                 f"TP: ${self.short_take_profit:,.2f} | "
                 f"SL: ${self.short_trail_stop:,.2f} | "
+                f"R:R: {rr:.2f} | "
                 f"Risk: ${risk_amount:.2f}"
             )
 
@@ -314,7 +321,13 @@ class PaperTrader:
         if signal == "BUY" and self.position == 0 and self.balance > 10:
             portfolio_val  = self.portfolio_value(price)
             risk_amount    = portfolio_val * config.RISK_PER_TRADE
+            # When hard stop (STOP_LOSS_PCT) is wider than ATR-based stop, TP must
+            # scale with it — otherwise R:R collapses below 1:1 on low-ATR pairs.
             stop_distance  = max(config.TRAIL_STOP_ATR_MULT * atr, price * config.STOP_LOSS_PCT)
+            tp_distance    = max(config.TAKE_PROFIT_ATR_MULT * atr, stop_distance * config.MIN_RR_RATIO)
+            rr             = tp_distance / stop_distance
+            if rr < config.MIN_RR_RATIO:
+                return f"HOLD — BUY R:R {rr:.2f}:1 below min {config.MIN_RR_RATIO}"
             position_units = risk_amount / stop_distance
             notional       = position_units * price
             notional       = min(notional, self.balance * config.MAX_POSITION_PCT)
@@ -323,7 +336,7 @@ class PaperTrader:
             self.position           = position_units
             self.balance           -= notional
             self.entry_price        = price
-            self.take_profit_price  = price + config.TAKE_PROFIT_ATR_MULT * atr
+            self.take_profit_price  = price + tp_distance
             self.trail_stop_price   = price - config.TRAIL_STOP_ATR_MULT * atr
             self.position_symbol    = symbol
             self.trades            += 1
@@ -332,6 +345,7 @@ class PaperTrader:
                 f"BOUGHT {position_units:.6f} {symbol} @ ${price:,.2f} | "
                 f"TP: ${self.take_profit_price:,.2f} | "
                 f"SL: ${self.trail_stop_price:,.2f} | "
+                f"R:R: {rr:.2f} | "
                 f"Risk: ${risk_amount:.2f}"
             )
 

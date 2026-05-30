@@ -38,6 +38,8 @@ MAX_POSITION_PCT       = float(os.environ.get("MAX_POSITION_PCT",       "0.90"))
 STOP_LOSS_PCT          = float(os.environ.get("STOP_LOSS_PCT",          "0.025"))
 TAKE_PROFIT_ATR_MULT   = float(os.environ.get("TAKE_PROFIT_ATR_MULT",   "2.5"))
 TRAIL_STOP_ATR_MULT    = float(os.environ.get("TRAIL_STOP_ATR_MULT",    "1.5"))
+# Minimum R:R at entry. TP is scaled to max(ATR-based, stop_distance × MIN_RR_RATIO).
+MIN_RR_RATIO           = float(os.environ.get("MIN_RR_RATIO",           "2.25"))
 TRADE_SIZE_PCT         = float(os.environ.get("TRADE_SIZE_PCT",         "0.95"))
 LOG_FILE               = os.environ.get("LOG_FILE", "trades_log.csv")
 

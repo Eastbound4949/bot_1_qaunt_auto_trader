@@ -575,7 +575,7 @@ def train_and_save(symbol: str | None = None, model_file: str | None = None) -> 
         if mask.sum() > 0:
             prec = (y_te[mask] == 1).mean()
             cov  = mask.sum() / len(y_te)
-            flag = " ← TARGET" if thresh == config.BUY_THRESHOLD else ""
+            flag = " <- TARGET" if thresh == config.BUY_THRESHOLD else ""
             print(f"  {thresh:>10.0%} {prec:>10.1%} {mask.sum():>10d} {cov:>10.1%}{flag}")
 
     print(f"\n[trainer] Walk-forward precision (5-fold)...")
@@ -690,14 +690,14 @@ def train_and_save_short(symbol: str | None = None, model_file: str | None = Non
         if mask.sum() > 0:
             prec = (y_te[mask] == 1).mean()
             cov  = mask.sum() / len(y_te)
-            flag = " ← TARGET" if thresh == config.SHORT_THRESHOLD else ""
+            flag = " <- TARGET" if thresh == getattr(config, "SHORT_THRESHOLD", 0.50) else ""
             print(f"  {thresh:>10.0%} {prec:>10.1%} {mask.sum():>10d} {cov:>10.1%}{flag}")
 
     print(f"\n[trainer] Walk-forward precision (5-fold)...")
-    _, wf_thr, wf_std = _walk_forward_precision(X[selected], y, threshold=config.SHORT_THRESHOLD)
+    _, wf_thr, wf_std = _walk_forward_precision(X[selected], y, threshold=getattr(config, "SHORT_THRESHOLD", 0.50))
     break_even = 1.0 / (1.0 + config.TAKE_PROFIT_ATR_MULT / config.TRAIL_STOP_ATR_MULT)
     flag = "ok" if wf_thr >= break_even else f"LOSING (need >{break_even:.0%})"
-    print(f"  @ SHORT threshold {config.SHORT_THRESHOLD:.0%}: {wf_thr:.1%} ± {wf_std:.1%}  [{flag}]")
+    print(f"  @ SHORT threshold {getattr(config, "SHORT_THRESHOLD", 0.50):.0%}: {wf_thr:.1%} ± {wf_std:.1%}  [{flag}]")
 
     payload = {
         "model":              calibrated,
