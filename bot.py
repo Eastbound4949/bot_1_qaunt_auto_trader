@@ -511,6 +511,12 @@ def run_bot():
             return
 
         # ── Phase 3: Scan for best entry opportunity (LONG or SHORT) ──────────
+        # Session gate: only enter 05:00-20:00 UTC (active liquidity hours)
+        utc_hour = datetime.utcnow().hour
+        if not (5 <= utc_hour < 20):
+            print(f"[bot] Outside entry session ({utc_hour:02d} UTC) — skipping scan")
+            return
+
         candidates = _scan_symbols()
         if not candidates:
             print("[bot] No scan results.")

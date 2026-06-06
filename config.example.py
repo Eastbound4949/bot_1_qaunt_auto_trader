@@ -21,7 +21,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 # binance/bybit are blocked on US-based servers.
 EXCHANGE = os.environ.get("EXCHANGE", "kucoin")
 SYMBOL   = os.environ.get("SYMBOL",   "BTCUSDT")
-SYMBOLS  = os.environ.get("SYMBOLS",  "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,AVAXUSDT,DOGEUSDT,UNIUSDT,ADAUSDT,DOTUSDT").split(",")
+SYMBOLS  = os.environ.get("SYMBOLS",  "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,AVAXUSDT,DOGEUSDT,UNIUSDT,ADAUSDT,DOTUSDT").split(",")  # XRPUSDT removed: net -$36 in 4 trades
 INTERVAL = os.environ.get("INTERVAL", "1h")
 LOOKBACK = os.environ.get("LOOKBACK", "730 day ago UTC")
 
@@ -33,11 +33,11 @@ ENABLE_SHORTING  = os.environ.get("ENABLE_SHORTING", "false").lower() == "true"
 
 # ─── Risk management ───────────────────────────────────────────────────────────
 PAPER_STARTING_BALANCE = float(os.environ.get("PAPER_STARTING_BALANCE", "10000"))
-RISK_PER_TRADE         = float(os.environ.get("RISK_PER_TRADE",         "0.01"))
+RISK_PER_TRADE         = float(os.environ.get("RISK_PER_TRADE",         "0.015"))  # 1.5% risk (+50% vs 1%)
 MAX_POSITION_PCT       = float(os.environ.get("MAX_POSITION_PCT",       "0.90"))
 STOP_LOSS_PCT          = float(os.environ.get("STOP_LOSS_PCT",          "0.025"))
-TAKE_PROFIT_ATR_MULT   = float(os.environ.get("TAKE_PROFIT_ATR_MULT",   "2.5"))
-TRAIL_STOP_ATR_MULT    = float(os.environ.get("TRAIL_STOP_ATR_MULT",    "1.5"))
+TAKE_PROFIT_ATR_MULT   = float(os.environ.get("TAKE_PROFIT_ATR_MULT",   "3.5"))   # was 2.5
+TRAIL_STOP_ATR_MULT    = float(os.environ.get("TRAIL_STOP_ATR_MULT",    "2.0"))   # was 1.5 — too tight
 # Minimum R:R at entry. TP is scaled to max(ATR-based, stop_distance × MIN_RR_RATIO).
 MIN_RR_RATIO           = float(os.environ.get("MIN_RR_RATIO",           "2.25"))
 TRADE_SIZE_PCT         = float(os.environ.get("TRADE_SIZE_PCT",         "0.95"))
