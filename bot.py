@@ -3,7 +3,7 @@ bot.py v3 — Regime-aware, multi-pair, adaptive trading bot.
 
 Upgrades over v2:
   - ATR-based take-profit (2.5× ATR above entry)
-  - Trailing stop (1.5× ATR below running high, hard floor at -2.5%)
+  - Trailing stop (2.0× ATR off running high/low, arms only at breakeven-or-better, hard floor at -2.5%)
   - ATR-based position sizing: risk exactly 1% of portfolio per trade
   - Regime gate: only trade when ADX trending + EMA stack aligned + HTF uptrend
   - Multi-pair scanner: picks highest-confidence signal across all SYMBOLS
@@ -149,7 +149,9 @@ class PaperTrader:
 
     Position sizing: risk RISK_PER_TRADE% of portfolio per trade, sized by ATR.
     Exit logic:      take-profit at entry + TAKE_PROFIT_ATR_MULT × ATR
-                     trailing stop 1.5 × ATR below running high
+                     trailing stop TRAIL_STOP_ATR_MULT × ATR off running high/low,
+                       but only arms once it would sit at breakeven-or-better
+                       (prevents a near-TP retrace from closing at a loss)
                      hard stop floor at entry × (1 - STOP_LOSS_PCT)
                      ML SELL signal also exits
     """
@@ -249,9 +251,14 @@ class PaperTrader:
 
         # ── Short position exit ───────────────────────────────────────────────
         if self.short_position > 0 and self.short_symbol == symbol:
-            # Trailing stop for shorts moves DOWN as price falls, never up
+            # Trailing stop for shorts moves DOWN as price falls, never up.
+            # Gate: only let it tighten to breakeven-or-better. Otherwise it
+            # parks between entry and the original stop — a normal retrace
+            # then closes the trade at a small loss before TP is ever reached
+            # (observed repeatedly: SHORT-TRAIL exits losing while price was
+            # still well inside the TP-bound move).
             new_trail = price + config.TRAIL_STOP_ATR_MULT * atr
-            if new_trail < self.short_trail_stop:
+            if new_trail < self.short_trail_stop and new_trail <= self.short_entry_price:
                 self.short_trail_stop = new_trail
 
             hard_stop      = self.short_entry_price * (1 + config.STOP_LOSS_PCT)
@@ -268,9 +275,12 @@ class PaperTrader:
 
         # ── Long position exit ────────────────────────────────────────────────
         if self.position > 0 and self.position_symbol == symbol:
-            # Update trailing stop: only moves up, never down
+            # Update trailing stop: only moves up, never down.
+            # Gate: only let it tighten to breakeven-or-better — same reasoning
+            # as the short side above: a stop parked between entry and
+            # the original floor turns a near-TP retrace into a needless loss.
             new_trail = price - config.TRAIL_STOP_ATR_MULT * atr
-            if new_trail > self.trail_stop_price:
+            if new_trail > self.trail_stop_price and new_trail >= self.entry_price:
                 self.trail_stop_price = new_trail
 
             hard_stop      = self.entry_price * (1 - config.STOP_LOSS_PCT)
