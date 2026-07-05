@@ -327,12 +327,14 @@ class PaperTrader:
             self.short_symbol      = symbol
             self.trades           += 1
 
+            # actual $ at risk after the MAX_POSITION_PCT cap, not the pre-cap target
+            actual_risk = position_units * stop_distance
             return (
                 f"SHORTED {position_units:.6f} {symbol} @ ${price:,.2f} | "
                 f"TP: ${self.short_take_profit:,.2f} | "
                 f"SL: ${self.short_trail_stop:,.2f} | "
                 f"R:R: {rr:.2f} | "
-                f"Risk: ${risk_amount:.2f}"
+                f"Risk: ${actual_risk:.2f}"
             )
 
         # ── Long entry ────────────────────────────────────────────────────────
@@ -359,12 +361,14 @@ class PaperTrader:
             self.position_symbol    = symbol
             self.trades            += 1
 
+            # actual $ at risk after the MAX_POSITION_PCT cap, not the pre-cap target
+            actual_risk = position_units * stop_distance
             return (
                 f"BOUGHT {position_units:.6f} {symbol} @ ${price:,.2f} | "
                 f"TP: ${self.take_profit_price:,.2f} | "
                 f"SL: ${self.trail_stop_price:,.2f} | "
                 f"R:R: {rr:.2f} | "
-                f"Risk: ${risk_amount:.2f}"
+                f"Risk: ${actual_risk:.2f}"
             )
 
         return "HOLD — no action"
