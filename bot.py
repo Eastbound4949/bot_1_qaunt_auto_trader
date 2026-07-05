@@ -604,7 +604,7 @@ if __name__ == "__main__":
     print(f" Pairs:    {', '.join(config.SYMBOLS)}")
     print(f" Interval: {config.INTERVAL}")
     print(f" Balance:  ${config.PAPER_STARTING_BALANCE:,.0f} (paper)")
-    print(f" BUY threshold: {config.BUY_THRESHOLD:.0%} | Risk/trade: {config.RISK_PER_TRADE:.0%}")
+    print(f" BUY threshold: {config.BUY_THRESHOLD:.0%} | Risk/trade: {config.RISK_PER_TRADE:.1%}")
     if config.ENABLE_SHORTING:
         print(f" SHORT threshold: {config.SHORT_THRESHOLD:.0%} | Shorting: ENABLED")
     print("=" * 55)
